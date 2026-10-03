@@ -2,6 +2,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const { ethers } = require('ethers');
 const opensea = require('./lib/opensea');
+const { ethUsdRate, usdStr } = require('./lib/ethusd');
 const state = require('./lib/state');
 const holdings = require('./lib/holdings');
 const sessionStore = require('./lib/session');
@@ -17,6 +18,15 @@ const path = require('path');
 
 function shortAddr(address) {
   return `${address.slice(0, 7)}...${address.slice(-5)}`;
+}
+
+// Display toggle:fastSettings.currency==='usdt' converts ETH amounts to USDT (cached rate).
+// Falls back to ETH on any error — display never blocks a flow.
+async function fmtAmt(v) {
+  if (fastSettings.currency === 'usdt') {
+    try { return usdStr(v, await ethUsdRate()); } catch (_) {}
+  }
+  return String(v);
 }
 const { OPENSEA_API_KEY, TELEGRAM_TOKEN, AUTHORIZED_USER_ID, PRIVATE_KEYS, providers, RPC_ENDPOINTS, walletAddresses, walletWallets, fastSettings, saveFastSettings, gasSettings, saveGasSettings, caMemory, rememberCa, mintSchedulesSlug } = state;
 const gasstrategy = require('./lib/gasstrategy');
@@ -116,7 +126,7 @@ async function goToSummary(chatId, session) {
     }));
     for (const selection of session.data.selections) {
       totalGasEth += selection.gasCost;
-      summary += `${shortAddr(selection.wallet.address)}: list ${selection.items.length} NFT(s) at ${selection.price} each${selection.gasNeeded ? ` (approval needed, ~${selection.gasCost.toFixed(5)} ETH gas)` : ''}\n`;
+      summary += `${shortAddr(selection.wallet.address)}: list ${selection.items.length} NFT(s) at ${await fmtAmt(selection.price)} each${selection.gasNeeded ? ` (approval needed, ~${selection.gasCost.toFixed(5)} ETH gas)` : ''}\n`;
     }
     summary += `Estimated total approval gas: ~${totalGasEth.toFixed(5)} ETH`;
     const listedMap = session.data.listedMap || {};
@@ -130,7 +140,7 @@ async function goToSummary(chatId, session) {
     }
   } else {
     for (const selection of session.data.selections) {
-      summary += `${shortAddr(selection.wallet.address)}: reprice ${selection.items.length} listing(s) to ${selection.price} each, no gas\n`;
+      summary += `${shortAddr(selection.wallet.address)}: reprice ${selection.items.length} listing(s) to ${await fmtAmt(selection.price)} each, no gas\n`;
     }
   }
 
@@ -365,7 +375,7 @@ async function resolveCollectionAndWallets(chatId, session, chainInput) {
   }
 
   session.data.floorPrice = floorPrice;
-  bot.sendMessage(chatId, `Floor price: ${floorPrice}`);
+  bot.sendMessage(chatId, `Floor price: ${await fmtAmt(floorPrice)}`);
 
   const listedMap = {};
   const walletsData = await Promise.all(PRIVATE_KEYS.map(async (pk) => {
@@ -477,6 +487,7 @@ function enterWalletPick(chatId, session) {
 function showFastSettings(chatId) {
   sessionStore.setSession(chatId, { flow: null, step: 'awaiting_settings', data: {} }, bot);
   const rows = [[{ text: `Price: ${fastSettings.price}`, callback_data: 'set_price' }]];
+  rows.push([{ text: `Currency: ${fastSettings.currency === 'usdt' ? 'USDT' : 'ETH'}`, callback_data: 'set_currency' }]);
   rows.push([{ text: `Confirmation: ${fastSettings.confirm === false ? 'OFF' : 'ON'}`, callback_data: 'set_confirm' }]);
   PRIVATE_KEYS.forEach((pk, i) => {
     const address = new ethers.Wallet(pk).address;
@@ -544,8 +555,8 @@ const mintFlow = require('./lib/mintflow')({ bot, sessionStore, providers, opens
 const OF_PAGE = 5;
 
 // token ids held by each wallet on chain, plus chain pick for multi-chain CA
-const offerFlow = require('./lib/offerflow')({ bot, sessionStore, opensea, OPENSEA_API_KEY, providers, rememberCa, mint, holdings, PRIVATE_KEYS, ethers, osauth, osoffers, OF_PAGE, endAndReturnToMenu, shortAddr, detectChainHoldings });
-const bulkOffer = require('./lib/bulkoffer')({ bot, sessionStore, osoffers, osauth, opensea, OPENSEA_API_KEY, OF_PAGE, endAndReturnToMenu, shortAddr });
+const offerFlow = require('./lib/offerflow')({ bot, sessionStore, opensea, OPENSEA_API_KEY, providers, rememberCa, mint, holdings, PRIVATE_KEYS, ethers, osauth, osoffers, OF_PAGE, endAndReturnToMenu, shortAddr, detectChainHoldings, fastSettings });
+const bulkOffer = require('./lib/bulkoffer')({ bot, sessionStore, osoffers, osauth, opensea, OPENSEA_API_KEY, OF_PAGE, endAndReturnToMenu, shortAddr, fastSettings });
 
 const scheduleMod = require('./lib/schedule')({ bot, sessionStore, schedules, mint, ethers, providers, fastmint, walletAddresses, endAndReturnToMenu, shortAddr, runMint: mintFlow.runMint, prepareMint: mintFlow.prepareMint, refreshPrep: mintFlow.refreshPrep, estimateGasCost: mintFlow.estimateGasCost, defaultGasLimit: mintFlow.defaultGasLimit });
 
@@ -1002,7 +1013,7 @@ async function handleCallback(chatId, query) {
     return startDetection(chatId, session);
   }
 
-  if (query.data === 'set_price' || query.data === 'set_confirm' || query.data === 'set_done' || query.data === 'set_gas' || query.data.startsWith('setw_') || query.data.startsWith('gas_')) {
+  if (query.data === 'set_price' || query.data === 'set_currency' || query.data === 'set_confirm' || query.data === 'set_done' || query.data === 'set_gas' || query.data.startsWith('setw_') || query.data.startsWith('gas_')) {
     if (!session || session.step !== 'awaiting_settings') {
       return bot.answerCallbackQuery(query.id, { text: 'Button no longer valid' });
     }
@@ -1017,6 +1028,12 @@ async function handleCallback(chatId, query) {
       if (!gasstrategy.PRESETS[strategy]) return bot.answerCallbackQuery(query.id, { text: 'Unknown preset' });
       gasSettings.strategy = strategy;
       saveGasSettings();
+      return showFastSettings(chatId);
+    }
+
+    if (query.data === 'set_currency') {
+      fastSettings.currency = fastSettings.currency === 'usdt' ? 'eth' : 'usdt';
+      saveFastSettings();
       return showFastSettings(chatId);
     }
 
