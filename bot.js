@@ -1111,6 +1111,18 @@ async function handleCallback(chatId, query) {
     return offerFlow.renderOfferTokens(chatId, session);
   }
 
+  if (query.data.startsWith('offtok_')) {
+    if (session.step !== 'awaiting_offer_token') return bot.answerCallbackQuery(query.id, { text: 'Button no longer valid' });
+    await bot.answerCallbackQuery(query.id);
+    return offerFlow.pickOfferToken(chatId, session, Number(query.data.slice(7)));
+  }
+
+  if (query.data.startsWith('offpage_')) {
+    if (session.step !== 'awaiting_offer_token') return bot.answerCallbackQuery(query.id, { text: 'Button no longer valid' });
+    await bot.answerCallbackQuery(query.id);
+    return offerFlow.pageOfferTokens(chatId, session, query.data.slice(8));
+  }
+
   if (query.data.startsWith('bulkoff_tgl_')) {
     if (session.step !== 'bulk_offer_pick' || !session.data.bulkOffer) return bot.answerCallbackQuery(query.id, { text: 'Button no longer valid' });
     await bot.answerCallbackQuery(query.id);
