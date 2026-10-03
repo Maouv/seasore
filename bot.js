@@ -188,20 +188,40 @@ async function processItem(chatId, session, job, expirationTime) {
       accountAddress: selection.wallet.address,
       amount: selection.price,
       expirationTime,
+      zone: opensea.signedZone(session.data.chain),
     };
-
     if (session.flow === 'list') {
       for (const old of job.cancelListings || []) {
-        await sdk.api.orders.offchainCancelOrder(old.protocolAddress, old.orderHash, session.data.chain);
+        await opensea.cancelListing(selection.wallet, old, session.data.chain);
       }
       if (job.cancelListings?.length > 0) {
         console.log(`cancelled ${job.cancelListings.length} old listing(s) for token ${tokenId} before relisting`);
       }
       await sdk.createListing(listingParams);
     } else if (session.mode === 'close') {
-      await sdk.api.orders.offchainCancelOrder(item.protocolAddress, item.orderHash, session.data.chain);
+      for (const lst of item.allListings || [item]) {
+        await opensea.cancelListing(selection.wallet, lst, session.data.chain);
+      }
+    } else if (Number(selection.price) < Number(item.priceDisplay)) {
+      // Price goes DOWN:the new listing becomes the cheapest one, so cancelling the old (higher) one is
+      // optional. List first (never a gap without a listing), then cancel off-chain on a best-effort basis.
+
+      // An old listing without a signed zone cannot be cancelled off-chain;it is left to expire(no gas..
+      await sdk.createListing(listingParams);
+      let left =0;
+      for (const lst of item.allListings || [item]) {
+        try {
+          await opensea.cancelListing(selection.wallet, lst, session.data.chain, { onchain: false });
+        } catch (cancelErr) {
+          left +=1;
+        }
+      }
+      if (left > 0) return { ...base, status: 'ok', note: `${left} old higher listing(s) left active` };
     } else {
-      await sdk.api.orders.offchainCancelOrder(item.protocolAddress, item.orderHash, session.data.chain);
+      // Price goes UP (or stays):the old cheaper listing would still be buyable, so it MUST be cancelled first..
+      for (const lst of item.allListings || [item]) {
+        await opensea.cancelListing(selection.wallet, lst, session.data.chain);
+      }
       cancelled = true;
       await sdk.createListing(listingParams);
     }
@@ -211,6 +231,7 @@ async function processItem(chatId, session, job, expirationTime) {
     return { ...base, status: 'failed', error };
   }
 }
+
 
 function buildResultSummary(results, startedAt, statsBefore) {
   const count = (status) => results.filter((r) => r.status === status).length;
@@ -232,6 +253,11 @@ function buildResultSummary(results, startedAt, statsBefore) {
     for (const [error, ids] of [...byError].slice(0, 5)) {
       text += `\n${error}\n  tokens: ${ids.slice(0, 15).join(', ')}${ids.length > 15 ? ` (+${ids.length - 15} more)` : ''}`;
     }
+  }
+
+  const left = results.filter((r) => r.note).map((r) => r.tokenId);
+  if (left.length > 0) {
+    text += `\n\nRelisted cheaper, but the old higher listing could not be cancelled off-chain (no signed zone) and stays until it expires: ${left.slice(0, 15).join(', ')}${left.length > 15 ? ` (+${left.length - 15} more)` : ''}`;
   }
 
   const skipped = results.filter((r) => r.status === 'skipped').map((r) => r.tokenId);
@@ -367,7 +393,21 @@ async function resolveCollectionAndWallets(chatId, session, chainInput) {
     } else {
       const listings = await opensea.getOpenListings(sdk, wallet.address, slug, session.data.contractAddress, chain);
       const verified = await holdings.filterOwned(provider, session.data.contractAddress, wallet.address, listings, (l) => l.tokenId);
-      items = verified.items;
+      const byToken = new Map();
+      for (const l of verified.items) {
+        const key = String(l.tokenId);
+        const cur = byToken.get(key);
+        if (cur) {
+          cur.allListings.push(l);
+          if (Number(l.priceDisplay) < Number(cur.priceDisplay)) cur.priceDisplay = l.priceDisplay;
+        } else {
+          byToken.set(key, { ...l, allListings: [l], priceDisplay: Number(l.priceDisplay) });
+        }
+      }
+      items = [...byToken.values()];
+      if (verified.items.length > items.length) {
+        notes.push(`${verified.items.length - items.length} extra stacked listing(s) on the same token(s) (counted once)`);
+      }
       if (verified.removed > 0) {
         notes.push(`${verified.removed} stale listing(s) hidden, token no longer owned`);
       }

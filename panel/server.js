@@ -107,7 +107,7 @@ async function executeListJob(job, listCfg) {
           job.done += 1; continue;
         }
         for (const old of j.cancelListings || []) {
-          await sdk.api.orders.offchainCancelOrder(old.protocolAddress, old.orderHash, chain);
+          await opensea.cancelListing(selection.wallet, old, chain);
         }
         if (j.cancelListings?.length > 0) jobLine(job, `cancelled ${j.cancelListings.length} old listing(s) for #${tokenId}`);
         await sdk.createListing({
@@ -115,6 +115,7 @@ async function executeListJob(job, listCfg) {
           accountAddress: selection.wallet.address,
           amount: selection.price,
           expirationTime,
+          zone: opensea.signedZone(chain),
         });
         jobLine(job, `#${tokenId} listed at ${selection.price}`);
         job.results.push({ tokenId, wallet: selection.wallet.address, status: 'ok', price: selection.price });
@@ -134,7 +135,8 @@ async function executeListJob(job, listCfg) {
 
 async function executeManageJob(job, cfg) {
   const { ca, chainInput, chain } = cfg;
-  const sdk = opensea.makeSdk(new ethers.Wallet(PRIVATE_KEYS[cfg.walletIndex], providers[chainInput]), chain, OPENSEA_API_KEY);
+  const manageWallet = new ethers.Wallet(PRIVATE_KEYS[cfg.walletIndex], providers[chainInput]);
+  const sdk = opensea.makeSdk(manageWallet, chain, OPENSEA_API_KEY);
   const listings = await opensea.getOpenListings(sdk, walletAddresses[cfg.walletIndex], cfg.slug, ca, chain);
   const owned = listings.filter((l) => cfg.tokenIds.includes(String(l.tokenId)));
   job.total = owned.length;
@@ -143,23 +145,26 @@ async function executeManageJob(job, cfg) {
     jobLine(job, 'no matching active listings');
     return;
   }
-  for (const l of owned) {
+  const relisted = new Set();
+  for (const lst of owned) {
     try {
-      await sdk.api.orders.offchainCancelOrder(l.protocolAddress, l.orderHash, chain);
-      jobLine(job, `#${l.tokenId} closed`);
-      job.results.push({ tokenId: String(l.tokenId), status: 'ok' });
-      if (cfg.mode === 'reprice') {
+      await opensea.cancelListing(manageWallet, lst, chain);
+      jobLine(job, `#${lst.tokenId} closed`);
+      job.results.push({ tokenId: String(lst.tokenId), status: 'ok' });
+      if (cfg.mode === 'reprice' && !relisted.has(String(lst.tokenId))) {
         await sdk.createListing({
-          asset: { tokenId: String(l.tokenId), tokenAddress: ca },
+          asset: { tokenId: String(lst.tokenId), tokenAddress: ca },
           accountAddress: walletAddresses[cfg.walletIndex],
           amount: cfg.price,
           expirationTime: Math.round(Date.now() / 1000 + 60 * 60 * 24 * 7),
+          zone: opensea.signedZone(chain),
         });
-        jobLine(job, `#${l.tokenId} relisted at ${cfg.price}`);
+        relisted.add(String(lst.tokenId));
+        jobLine(job, `#${lst.tokenId} relisted at ${cfg.price}`);
       }
     } catch (err) {
-      jobLine(job, `#${l.tokenId} failed: ${err.message.slice(0, 120)}`);
-      job.results.push({ tokenId: String(l.tokenId), status: 'failed', error: err.message.slice(0, 150) });
+      jobLine(job, `#${lst.tokenId} failed: ${err.message.slice(0, 120)}`);
+      job.results.push({ tokenId: String(lst.tokenId), status: 'failed', error: err.message.slice(0, 150) });
     }
     job.done += 1;
   }
@@ -255,8 +260,8 @@ async function runAcceptJob(job, cfg) {
   if (!stillOwned) { job.status = 'done'; jobLine(job, 'token no longer owned'); return; }
   const sdk = opensea.makeSdk(owner.wallet, opensea.CHAIN_MAP[chainInput], OPENSEA_API_KEY);
   const openListings = await opensea.getOpenListings(sdk, owner.address, slug, ca, opensea.CHAIN_MAP[chainInput]);
-  for (const l of openListings.filter((l) => String(l.tokenId) === String(tokenId))) {
-    await sdk.api.orders.offchainCancelOrder(l.protocolAddress, l.orderHash, opensea.CHAIN_MAP[chainInput]);
+  for (const lst of openListings.filter((l) => String(l.tokenId) === String(tokenId))) {
+    await opensea.cancelListing(owner.wallet, lst, opensea.CHAIN_MAP[chainInput]);
   }
   jobLine(job, `accepting ${offer.priceStr} on #${tokenId}`);
   const bearer = await osauth.walletJwt(owner.wallet);
