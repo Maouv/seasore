@@ -3,3 +3,4 @@ node_modules/
 .os-pat-cache.json
 .os-jwt-cache.json
 mint-history.json
+tmp_*
