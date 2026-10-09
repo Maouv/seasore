@@ -41,6 +41,28 @@
     ],
     "mintSig": "mint(uint256)",
     "mintName": "mint",
+    "status": "fired"
+  },
+  {
+    "id": "muzj76lo",
+    "chatId": 5112950656,
+    "chain": "robinhood",
+    "ca": "0x830127371a106c236f785c4742b71cf90570687c",
+    "slug": "degenscasino",
+    "collection": "Degens Casino",
+    "stageIndex": 3,
+    "maxPerWallet": 1,
+    "label": "FCFS Phase",
+    "type": "SIGNED_PRESALE",
+    "startMs": 1791568800000,
+    "endMs": 1791572400000,
+    "priceEth": 0,
+    "qty": 1,
+    "wallets": [
+      0
+    ],
+    "mintSig": "mintSeaDrop(address,uint256)",
+    "mintName": "mintSeaDrop",
     "status": "pending"
   }
 ]
