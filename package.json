@@ -12,11 +12,11 @@
     "@opensea/sdk": "^12.9.0",
     "dotenv": "^18.0.1",
     "ethers": "^6.17.0",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "solc": "^0.8.37"
   },
   "description": "",
   "keywords": [],
   "author": "",
   "license": "ISC"
 }
-
