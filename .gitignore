@@ -4,3 +4,4 @@ node_modules/
 .os-jwt-cache.json
 mint-history.json
 tmp_*
+.env.bak
